@@ -1,8 +1,7 @@
 
-"""PyTorch OpenAI GPT-2 model, code copied from Huggingface"""
+"""PyTorch OpenAI GPT-2 model modified to support parallel-gpt2, code copied from Huggingface"""
 
-import math
-from platform import architecture
+
 import warnings
 from typing import Optional, Tuple, Union
 
@@ -10,9 +9,6 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 
-from transformers.utils import (
-    logging,
-)
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions

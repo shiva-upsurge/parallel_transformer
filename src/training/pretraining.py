@@ -24,15 +24,12 @@ from transformers import (
     default_data_collator
 )
 import json
-from datasets import DatasetDict
-from transformers.models.llama.configuration_llama import LlamaConfig
-from src.models.modeling_llama import LlamaForCausalLM
+from src.models.modeling_gpt2 import GPT2LMHeadModel, GPT2Config
+from src.models.modeling_parallel_gpt2 import ParallelGPT2LMHeadModel, ParallelGPT2Config
 from src.training.logger_callbacks import ParameterLoggingCallback
 from dotenv import load_dotenv
 load_dotenv()
 import os
-import wandb
-wandb.init(project=os.getenv("WANDB_PROJECT"))
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -302,30 +299,7 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    config_kwargs = {
-        "cache_dir": model_args.cache_dir,
-        "revision": model_args.model_revision,
-        **model_args.llama_model_config
-    }
-    config = LlamaConfig(**config_kwargs)
 
-    # --- GPU-logged helper functions ---
-    @log_gpu_usage
-    def load_model(training_args, model_args, config):
-        print(training_args.local_rank, 'start load model')
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        config.baseline_each_head = model_args.baseline_each_head
-        config.only_drift = model_args.only_drift
-        config.only_diffusion = model_args.only_diffusion
-        config.attention_type = model_args.attention_type
-        model = LlamaForCausalLM(config=config)
-        model.to(device)
-        n_params = sum({p.data_ptr(): p.numel()
-                       for p in model.parameters()}.values())
-        logger.info(
-            f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
-        print(training_args.local_rank, 'end load model')
-        return model
 
     @log_gpu_usage
     def preprocess_data(training_args, data_args, config_parse, model_args):
@@ -374,14 +348,34 @@ def main():
         trainer.save_metrics("eval", metrics)
         return metrics
 
+    # --- GPU-logged helper functions ---
+    @log_gpu_usage
+    def load_model(training_args, model_call, config):
+        print(training_args.local_rank, 'start load model')
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        model = model_call(config=config)
+        model.to(device)
+        n_params = sum({p.data_ptr(): p.numel()
+                       for p in model.parameters()}.values())
+        logger.info(
+            f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
+        print(training_args.local_rank, 'end load model')
+        return model
+
     # --- End GPU-logged helper functions ---
+    config_kwargs = {
+        "cache_dir": model_args.cache_dir
+    }
+    if model_args.model_type=="gpt2":
+        config = GPT2Config.from_pretrained("gpt2-medium", **config_kwargs)
+        model = load_model(training_args, GPT2LMHeadModel, config)
+    elif model_args.model_type == "gpt2-medium":
+        config = ParallelGPT2Config.from_pretrained("gpt2-medium", architectures=["ParallelGPT2LMHeadModel"], **config_kwargs)
+        model = load_model(training_args, ParallelGPT2LMHeadModel, config)
+    else:
+        raise ValueError(f"Unknown model type: {model_args.model_type}")
 
-    # Load model
-    model = load_model(training_args, model_args, config)
-
-    # Preprocess data (load tokenizer and datasets)
-    tokenizer, lm_datasets = preprocess_data(
-        training_args, data_args, config_parse, model_args)
+    tokenizer, lm_datasets = preprocess_data(training_args, data_args, config_parse, model_args)
 
     # Resize embeddings if needed.
     embedding_size = model.get_input_embeddings().weight.shape[0]
@@ -440,7 +434,7 @@ def main():
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.do_eval else None,
-        callbacks=[ParameterLoggingCallback()],
+        callbacks=[],
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 

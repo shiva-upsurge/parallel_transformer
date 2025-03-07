@@ -2,7 +2,7 @@ from itertools import chain
 from transformers.testing_utils import CaptureLogger
 import transformers
 from datasets import DatasetDict
-from transformers import LlamaTokenizerFast, PreTrainedTokenizerFast
+from transformers import GPT2TokenizerFast, PreTrainedTokenizerFast
 import os
 from datasets import load_dataset
 from dotenv import load_dotenv
@@ -11,8 +11,7 @@ load_dotenv()
 
 def preprocess_and_tokenize_data(training_args, data_args, config_dataset, model_args):
     hub_dataset_name = f"BluebrainAI/{config_dataset['name']}-seq{model_args.max_seq_length}-tokenized-grouped"
-    columns_to_remove = ["prompt", "token_length",
-                         "audience", "format", "seed_data"]
+    columns_to_remove = []
     raw_datasets = DatasetDict()
     config_dataset.pop("split", None)  # Remove "split" if present
     tokenizer_kwargs = {
@@ -20,8 +19,8 @@ def preprocess_and_tokenize_data(training_args, data_args, config_dataset, model
         "use_fast": model_args.use_fast_tokenizer,
     }
 
-    tokenizer = LlamaTokenizerFast.from_pretrained(
-        model_args.tokenizer_file,
+    tokenizer = GPT2TokenizerFast.from_pretrained(
+        "gpt2-medium",
         model_max_length=model_args.max_seq_length,
         **tokenizer_kwargs
     )
@@ -71,9 +70,9 @@ def preprocess_and_tokenize_data(training_args, data_args, config_dataset, model
             split=train_split,
             **config_dataset
         )
-        for key in raw_datasets.keys():
-            raw_datasets[key] = raw_datasets[key].remove_columns(
-                columns_to_remove)
+        # for key in raw_datasets.keys():
+        #     raw_datasets[key] = raw_datasets[key].remove_columns(
+        #         columns_to_remove)
 
         # First we tokenize all the texts.
         if training_args.do_train:

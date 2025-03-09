@@ -172,3 +172,4 @@ cython_debug/
 wandb
 .vscode
 */**/__pycache__
+output/*

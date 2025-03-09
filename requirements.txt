@@ -4,3 +4,4 @@ torch
 wandb
 python-dotenv
 torchdata
+lm-eval[math,ifeval,sentencepiece,api]

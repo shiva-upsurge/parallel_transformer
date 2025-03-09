@@ -21,12 +21,12 @@ from transformers import (
     Trainer,
     TrainingArguments,
     set_seed,
-    default_data_collator
+    default_data_collator,
+    EarlyStoppingCallback
 )
 import json
 from src.models.modeling_gpt2 import GPT2LMHeadModel, GPT2Config
 from src.models.modeling_parallel_gpt2 import ParallelGPT2LMHeadModel, ParallelGPT2Config
-from src.training.logger_callbacks import ParameterLoggingCallback
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -353,6 +353,7 @@ def main():
     def load_model(training_args, model_call, config):
         print(training_args.local_rank, 'start load model')
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        config.model_type = model_args.model_type
         model = model_call(config=config)
         model.to(device)
         n_params = sum({p.data_ptr(): p.numel()
@@ -368,9 +369,12 @@ def main():
     }
     if model_args.model_type=="gpt2":
         config = GPT2Config.from_pretrained("gpt2-medium", **config_kwargs)
+        config.use_cache = False
         model = load_model(training_args, GPT2LMHeadModel, config)
-    elif model_args.model_type == "gpt2-medium":
+    elif model_args.model_type == "parallel-gpt2":
         config = ParallelGPT2Config.from_pretrained("gpt2-medium", architectures=["ParallelGPT2LMHeadModel"], **config_kwargs)
+        config.model_type = model_args.model_type
+        config.use_cache = False
         model = load_model(training_args, ParallelGPT2LMHeadModel, config)
     else:
         raise ValueError(f"Unknown model type: {model_args.model_type}")
@@ -413,11 +417,117 @@ def main():
         metric = evaluate.load("accuracy")
         print(training_args.local_rank, 'end load metric')
 
-        def compute_metrics(eval_preds):
-            preds, labels = eval_preds
-            labels = labels[:, 1:].reshape(-1)
-            preds = preds[:, :-1].reshape(-1)
-            return metric.compute(predictions=preds, references=labels)
+        # Import necessary libraries at the module level
+        import numpy as np
+        import math
+        from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+        import nltk
+
+        # Download nltk data if not already present
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt')
+        
+        def create_compute_metrics(tokenizer):
+            """Create a metrics computation function that uses the given tokenizer.
+            
+            Args:
+                tokenizer: The tokenizer to use for converting token IDs to tokens.
+                
+            Returns:
+                A function that computes metrics given an EvalPrediction object.
+            """
+            def compute_metrics(eval_preds):
+                """Compute evaluation metrics for the model.
+                
+                Args:
+                    eval_preds: An EvalPrediction object containing predictions and labels.
+                    
+                Returns:
+                    A dictionary of metrics.
+                """
+                # Access predictions and labels from the EvalPrediction object
+                logits = eval_preds.predictions  # Shape: [batch_size, seq_length, vocab_size]
+                labels = eval_preds.label_ids    # Shape: [batch_size, seq_length]
+                
+                # Get loss if available
+                loss = None
+                if hasattr(eval_preds, 'losses') and eval_preds.losses is not None:
+                    if isinstance(eval_preds.losses, np.ndarray) and eval_preds.losses.size > 0:
+                        loss = float(np.mean(eval_preds.losses))
+                
+                # For token classification tasks, we need the token-level predictions
+                # Get the highest probability token at each position
+                if len(logits.shape) == 3:  # [batch_size, seq_length, vocab_size]
+                    token_predictions = np.argmax(logits, axis=-1)  # [batch_size, seq_length]
+                else:  # Already token predictions
+                    token_predictions = logits
+                
+                # Shift predictions and labels for language modeling
+                # Predictions are for the next token, so we compare preds[:, :-1] with labels[:, 1:]
+                shifted_preds = token_predictions[:, :-1]  # Remove last token prediction
+                shifted_labels = labels[:, 1:]             # Remove first token (usually BOS)
+                
+                # Flatten for token-level metrics
+                flat_preds = shifted_preds.reshape(-1)
+                flat_labels = shifted_labels.reshape(-1)
+                
+                # Calculate accuracy
+                accuracy_metric = metric.compute(predictions=flat_preds, references=flat_labels)
+                
+                # Initialize metrics dictionary
+                metrics_dict = {}
+                
+                # Add accuracy
+                if isinstance(accuracy_metric, dict):
+                    metrics_dict.update(accuracy_metric)
+                else:
+                    metrics_dict['accuracy'] = accuracy_metric
+                
+                # Calculate perplexity if loss is available
+                if loss is not None:
+                    metrics_dict['perplexity'] = math.exp(loss)
+                    metrics_dict["loss"] = loss
+                
+                # Calculate BLEU score on a subset of examples
+                # This is computationally expensive, so we limit the number of samples
+                batch_size = token_predictions.shape[0]
+                max_samples = min(10, batch_size)  # Limit to at most 10 samples
+                
+                if max_samples > 0:
+                    bleu_scores = []
+                    smoothing = SmoothingFunction().method1
+                    
+                    for i in range(max_samples):
+                        # Convert token IDs to actual tokens
+                        pred_tokens = tokenizer.convert_ids_to_tokens(token_predictions[i].tolist())
+                        label_tokens = tokenizer.convert_ids_to_tokens(labels[i].tolist())
+                        
+                        # Filter out padding tokens if needed
+                        if tokenizer.pad_token_id is not None:
+                            pred_tokens = [t for t in pred_tokens if t != tokenizer.pad_token]
+                            label_tokens = [t for t in label_tokens if t != tokenizer.pad_token]
+                        
+                        # Calculate BLEU score for this sample
+                        try:
+                            sample_bleu = sentence_bleu([label_tokens], pred_tokens, smoothing_function=smoothing)
+                            bleu_scores.append(sample_bleu)
+                        except Exception as e:
+                            print(f"Error calculating BLEU score: {e}")
+                            continue
+                    
+                    if bleu_scores:
+                        metrics_dict['bleu'] = float(np.mean(bleu_scores))
+                    else:
+                        metrics_dict['bleu'] = 0.0
+                
+                return metrics_dict
+            
+            return compute_metrics
+        
+        # Create the compute_metrics function with the tokenizer
+        compute_metrics = create_compute_metrics(tokenizer)
 
     print(training_args.local_rank, 'Initialize our Trainer')
 
@@ -426,6 +536,10 @@ def main():
         batch["labels"] = batch["input_ids"].clone()
         return batch
 
+    early_stopping_callback = EarlyStoppingCallback(
+        early_stopping_patience=2,    # Number of evaluations with no improvement after which training will be stopped
+        early_stopping_threshold=0.0  # Minimum change to qualify as an improvement
+    )
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -434,7 +548,7 @@ def main():
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.do_eval else None,
-        callbacks=[],
+        callbacks=[early_stopping_callback],
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 

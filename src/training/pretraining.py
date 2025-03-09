@@ -27,13 +27,14 @@ from transformers import (
 import json
 from src.models.modeling_gpt2 import GPT2LMHeadModel, GPT2Config
 from src.models.modeling_parallel_gpt2 import ParallelGPT2LMHeadModel, ParallelGPT2Config
+from src.models.modeling_dd_gpt2 import DDGPT2LMHeadModel, DDGPT2Config
 from dotenv import load_dotenv
 load_dotenv()
 import os
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
 @dataclass
 class ModelArguments:
@@ -116,18 +117,13 @@ class ModelArguments:
             )
         },
     )
-    baseline_each_head: bool = field(default=False, metadata={
-                                     "help": "Whether to use a baseline for each attention head."})
-    only_drift: bool = field(default=True, metadata={
-                             "help": "Whether to only use drift attention."})
-    only_diffusion: bool = field(default=False, metadata={
-                                 "help": "Whether to only use diffusion."})
-    with_baseline: bool = field(default=True, metadata={
+
+    apply_drift: bool = field(default=True, metadata={
+                             "help": "Whether to apply drift attention."})
+    apply_diffusion: bool = field(default=False, metadata={
+                                 "help": "Whether to apply diffusion."})
+    baseline_each_head: bool = field(default=True, metadata={
                                 "help": "Whether to include a baseline."})
-    attn_implementation: str = field(default="driftdiffusion", metadata={
-                                     "help": "Attention implementation type."})
-    attention_type: str = field(
-        default="drift-diffusion", metadata={"help": "Type of attention to use."})
     llama_model_config: dict = field(
         default=None, metadata={"help": "Llama model configuration."})
 
@@ -353,7 +349,6 @@ def main():
     def load_model(training_args, model_call, config):
         print(training_args.local_rank, 'start load model')
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        config.model_type = model_args.model_type
         model = model_call(config=config)
         model.to(device)
         n_params = sum({p.data_ptr(): p.numel()
@@ -373,9 +368,21 @@ def main():
         model = load_model(training_args, GPT2LMHeadModel, config)
     elif model_args.model_type == "parallel-gpt2":
         config = ParallelGPT2Config.from_pretrained("gpt2-medium", architectures=["ParallelGPT2LMHeadModel"], **config_kwargs)
+        ParallelGPT2Config.register_for_auto_class()
+        ParallelGPT2LMHeadModel.register_for_auto_class("AutoModel")
         config.model_type = model_args.model_type
         config.use_cache = False
         model = load_model(training_args, ParallelGPT2LMHeadModel, config)
+    elif model_args.model_type == "dd-gpt2":
+        config = DDGPT2Config.from_pretrained("gpt2-medium", architectures=["DDGPT2LMHeadModel"], **config_kwargs)
+        DDGPT2Config.register_for_auto_class()
+        DDGPT2LMHeadModel.register_for_auto_class("AutoModel")
+        config.model_type = model_args.model_type
+        config.apply_drift = model_args.apply_drift
+        config.apply_diffusion = model_args.apply_diffusion
+        config.baseline_each_head = model_args.baseline_each_head
+        config.use_cache = False
+        model = load_model(training_args, DDGPT2LMHeadModel, config)
     else:
         raise ValueError(f"Unknown model type: {model_args.model_type}")
 

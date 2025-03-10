@@ -42,6 +42,9 @@ class ParallelGPT2Model(ParallelGPT2PretrainedModel):
             raise ValueError("Number of hidden layers must be even")
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
+        self.config.bottleneck_method = getattr(config, "bottleneck_method", "mean")
+        if self.config.bottleneck_method=="concat":
+            self.bottleneck = nn.Linear(2*self.embed_dim, self.embed_dim)
 
         # Model parallel
         self.model_parallel = False
@@ -292,8 +295,13 @@ class ParallelGPT2Model(ParallelGPT2PretrainedModel):
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                 )
-
-            hidden_states = (outputs_left[0] + outputs_right[0]) / 2 ## taking mean
+            if self.config.bottleneck_method=="concat":
+                hidden_states = torch.cat((outputs_left[0], outputs_right[0]), dim=-1)
+                hidden_states = self.bottleneck(hidden_states)
+            elif self.config.bottleneck_method=="add":  
+                hidden_states = (outputs_left[0] + outputs_right[0]) ## taking add
+            elif self.config.bottleneck_method=="mean":
+                hidden_states = (outputs_left[0] + outputs_right[0]) / 2 ## taking mean
             if use_cache is True:
                 presents = presents + (outputs_left[1], outputs_right[1])
 

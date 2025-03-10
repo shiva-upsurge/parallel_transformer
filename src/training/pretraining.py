@@ -124,6 +124,11 @@ class ModelArguments:
                                  "help": "Whether to apply diffusion."})
     baseline_each_head: bool = field(default=True, metadata={
                                 "help": "Whether to include a baseline."})
+    
+    bottleneck_method: str = field(default="mean", metadata={
+        "help": "The method to use for the bottleneck. "
+    })
+
     llama_model_config: dict = field(
         default=None, metadata={"help": "Llama model configuration."})
 
@@ -371,6 +376,7 @@ def main():
         ParallelGPT2Config.register_for_auto_class()
         ParallelGPT2LMHeadModel.register_for_auto_class("AutoModel")
         config.model_type = model_args.model_type
+        config.bottleneck_method = getattr(model_args, "bottleneck_method", default="mean")
         config.use_cache = False
         model = load_model(training_args, ParallelGPT2LMHeadModel, config)
     elif model_args.model_type == "dd-gpt2":

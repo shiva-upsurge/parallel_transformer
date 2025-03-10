@@ -42,9 +42,6 @@ class DDGPT2Config(GPT2Config):
     model_type = "dd-gpt2"
     architectures = ["DDGPT2LMHeadModel"]
 
-class DDGPT2PretrainedModel(GPT2PreTrainedModel):
-    config_class = DDGPT2Config
-
 
 def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
     """Load tf checkpoints in a pytorch model"""
@@ -586,7 +583,7 @@ class DDGPT2PretrainedModel(PreTrainedModel):
     models.
     """
 
-    config_class = GPT2Config
+    config_class = DDGPT2Config
     load_tf_weights = load_tf_weights_in_gpt2
     base_model_prefix = "transformer"
     is_parallelizable = True

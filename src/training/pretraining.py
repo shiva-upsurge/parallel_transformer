@@ -376,7 +376,7 @@ def main():
         ParallelGPT2Config.register_for_auto_class()
         ParallelGPT2LMHeadModel.register_for_auto_class("AutoModel")
         config.model_type = model_args.model_type
-        config.bottleneck_method = getattr(model_args, "bottleneck_method", default="mean")
+        config.bottleneck_method = getattr(model_args, "bottleneck_method", "mean")
         config.use_cache = False
         model = load_model(training_args, ParallelGPT2LMHeadModel, config)
     elif model_args.model_type == "dd-gpt2":

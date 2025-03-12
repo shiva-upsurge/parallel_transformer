@@ -28,6 +28,8 @@ import json
 from src.models.modeling_gpt2 import GPT2LMHeadModel, GPT2Config
 from src.models.modeling_parallel_gpt2 import ParallelGPT2LMHeadModel, ParallelGPT2Config
 from src.models.modeling_dd_gpt2 import DDGPT2LMHeadModel, DDGPT2Config
+from src.models.modeling_rotating_head_gpt2 import RotatingHeadGPT2LMHeadModel, RotatingHeadGPT2Config
+
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -389,6 +391,14 @@ def main():
         config.baseline_each_head = model_args.baseline_each_head
         config.use_cache = False
         model = load_model(training_args, DDGPT2LMHeadModel, config)
+    elif model_args.model_type == "rotating-head-gpt2":
+        config = RotatingHeadGPT2Config.from_pretrained("gpt2-medium", architectures=["RotatingHeadGPT2LMHeadModel"], **config_kwargs)
+        RotatingHeadGPT2Config.register_for_auto_class()
+        RotatingHeadGPT2LMHeadModel.register_for_auto_class("AutoModel")
+        config.model_type = model_args.model_type
+        config.rotatinghead = getattr(model_args, "rotatinghead", "lr")
+        config.use_cache = False
+        model = load_model(training_args, RotatingHeadGPT2LMHeadModel, config)
     else:
         raise ValueError(f"Unknown model type: {model_args.model_type}")
 

@@ -52,5 +52,6 @@
     "gradient_checkpointing": true,
     "keep_in_memory": true,
     "metric_for_best_model":"eval_loss",
-    "greater_is_better":false
+    "greater_is_better":false,
+    "bottleneck_method": "concat"
 }

@@ -22,7 +22,8 @@ from transformers import (
     TrainingArguments,
     set_seed,
     default_data_collator,
-    EarlyStoppingCallback
+    EarlyStoppingCallback,
+    TrainerCallback
 )
 import json
 from src.models.modeling_gpt2 import GPT2LMHeadModel, GPT2Config
@@ -33,6 +34,7 @@ from src.models.modeling_rotating_head_gpt2 import RotatingHeadGPT2LMHeadModel, 
 from dotenv import load_dotenv
 load_dotenv()
 import os
+import wandb
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -559,10 +561,35 @@ def main():
         batch["labels"] = batch["input_ids"].clone()
         return batch
 
+    class GradientNormCallback(TrainerCallback):
+        """
+        A callback that logs gradient norms to wandb at each training step.
+        """
+        def on_pre_optimizer_step(self, args, state, control, model=None, **kwargs):
+            if model is None:
+                return
+            
+            # Only log on the main process in distributed training
+            if args.local_rank != 0 and args.local_rank != -1:
+                return
+
+            # Only log on logging steps (aligns with the trainer's logging frequency)
+            if state.global_step % args.logging_steps != 0:
+                return
+            
+            # Log gradient norms to wandb
+            for name, param in model.named_parameters():
+                if param.grad is not None and ".attn" in name:
+                    wandb.log({f"grad_norm/{name}": param.grad.norm().item()}, step=state.global_step)
+
     early_stopping_callback = EarlyStoppingCallback(
         early_stopping_patience=2,    # Number of evaluations with no improvement after which training will be stopped
         early_stopping_threshold=0.0  # Minimum change to qualify as an improvement
     )
+    
+    # Initialize gradient norm callback for wandb logging
+    gradient_norm_callback = GradientNormCallback()
+    
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -571,7 +598,7 @@ def main():
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.do_eval else None,
-        callbacks=[early_stopping_callback],
+        callbacks=[early_stopping_callback, gradient_norm_callback],
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 

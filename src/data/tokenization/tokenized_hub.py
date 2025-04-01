@@ -24,6 +24,8 @@ def preprocess_and_tokenize_data(training_args, data_args, config_dataset, model
         model_max_length=model_args.max_seq_length,
         **tokenizer_kwargs
     )
+    special_tokens_dict = {'additional_special_tokens': ['<|MASK|>']}
+    tokenizer.add_special_tokens(special_tokens_dict)
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
         raise Exception(
             "The tokenizer should inherit from PreTrainedTokenizerFast")

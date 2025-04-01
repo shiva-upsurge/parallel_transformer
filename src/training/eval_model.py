@@ -34,13 +34,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelArguments:
     """Arguments pertaining to which model/config we are going to evaluate."""
-    model_path: Optional[str] = field(
+    cache_dir: Optional[str] = field(
         default="./output/models/parallel-gpt2-medium-wikitext",
         metadata={"help": "The path to the local model directory."}
-    )
-    model_id_on_hub: Optional[str] = field(
-        default="BluebrainAI/parallel-gpt2-medium-wikitext",
-        metadata={"help": "The model ID on HuggingFace Hub."}
     )
     tokenizer_file: Optional[str] = field(
         default="gpt2-medium",
@@ -241,18 +237,18 @@ def load_and_evaluate_model(model_args, data_args, training_args):
     # Load model
     try:
         # Try loading from HuggingFace Hub first
-        logger.info(f"Attempting to load model from HuggingFace Hub: {model_args.model_id_on_hub}")
+        logger.info(f"Attempting to load model from HuggingFace Hub: {training_args.hub_model_id}")
         model = ParallelGPT2LMHeadModel.from_pretrained(
-            model_args.model_id_on_hub,
+            training_args.hub_model_id,
             trust_remote_code=True,
             use_auth_token=model_args.use_auth_token
         )
     except Exception as e:
         logger.warning(f"Failed to load from HuggingFace Hub: {e}")
         # Fall back to local path
-        logger.info(f"Attempting to load model from local path: {model_args.model_path}")
+        logger.info(f"Attempting to load model from local path: {model_args.cache_dir}")
         model = ParallelGPT2LMHeadModel.from_pretrained(
-            model_args.model_path,
+            model_args.cache_dir,
             trust_remote_code=True
         )
     
@@ -300,7 +296,7 @@ def load_and_evaluate_model(model_args, data_args, training_args):
     logger.info(f"Evaluation metrics: {metrics}")
     
     # Save metrics to file
-    metrics_output_dir = os.path.join(model_args.model_path, "eval_metrics.json")
+    metrics_output_dir = os.path.join(model_args.cache_dir, "eval_metrics.json")
     with open(metrics_output_dir, "w") as f:
         json.dump(metrics, f, indent=4)
     

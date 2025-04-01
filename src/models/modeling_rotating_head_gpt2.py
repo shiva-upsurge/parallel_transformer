@@ -152,6 +152,7 @@ class HeadSpecificLRRoPE(nn.Module):
 
         # Initialize head-specific frequencies (learnable)
         self.frequencies = nn.Parameter(torch.randn(num_heads, head_dim // 2))
+        self.layer_norm = nn.LayerNorm(head_dim // 2)
 
     def forward(self, Q, K):
         bs, heads, seq, embed = Q.size()
@@ -160,8 +161,8 @@ class HeadSpecificLRRoPE(nn.Module):
 
         positions = torch.arange(seq, device=Q.device).unsqueeze(1)  # [seq_length, 1]
 
-        cos_theta = torch.cos(positions * self.frequencies.unsqueeze(1))
-        sin_theta = torch.sin(positions * self.frequencies.unsqueeze(1))
+        cos_theta = torch.cos(positions * self.layer_norm(self.frequencies.unsqueeze(1)))
+        sin_theta = torch.sin(positions * self.layer_norm(self.frequencies.unsqueeze(1)))
 
         Q_even, Q_odd = Q[..., ::2], Q[..., 1::2]
         K_even, K_odd = K[..., ::2], K[..., 1::2]
@@ -183,6 +184,7 @@ class HeadSpecificGPRoPE(nn.Module):
         frequency_base = base_frequency ** (-torch.arange(0, head_dim, 2).float() / head_dim)
         scales = torch.logspace(0, -1, steps=num_heads, base=10.0).unsqueeze(1)  # [num_heads, 1]
         self.frequencies = (scales @ frequency_base.unsqueeze(0))  # [num_heads, dim//2]
+        self.layer_norm = nn.LayerNorm(head_dim)
 
     def forward(self, Q, K):
         bs, heads, seq, embed = Q.size()
@@ -191,8 +193,8 @@ class HeadSpecificGPRoPE(nn.Module):
 
         positions = torch.arange(seq, device=Q.device).unsqueeze(1).unsqueeze(0)  # [1, seq_length, 1]
 
-        cos_theta = torch.cos(positions * self.frequencies.unsqueeze(1))
-        sin_theta = torch.sin(positions * self.frequencies.unsqueeze(1))
+        cos_theta = torch.cos(positions * self.layer_norm(self.frequencies.unsqueeze(1)))
+        sin_theta = torch.sin(positions * self.layer_norm(self.frequencies.unsqueeze(1)))
 
         Q_even, Q_odd = Q[..., ::2], Q[..., 1::2]
         K_even, K_odd = K[..., ::2], K[..., 1::2]
@@ -413,7 +415,6 @@ class RotatingheadGPT2Attention(GPT2Attention):
             self.rope = HeadSpecificLRRoPE(config.num_attention_heads,  self.head_dim)
         elif config.rotatinghead == 'gp':
             self.rope = HeadSpecificGPRoPE(config.num_attention_heads,  self.head_dim)
-
         self.rotatinghead = config.rotatinghead
 
     def forward(

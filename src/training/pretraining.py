@@ -30,6 +30,7 @@ from src.models.modeling_gpt2 import GPT2LMHeadModel, GPT2Config
 from src.models.modeling_parallel_gpt2 import ParallelGPT2LMHeadModel, ParallelGPT2Config
 from src.models.modeling_dd_gpt2 import DDGPT2LMHeadModel, DDGPT2Config
 from src.models.modeling_rotating_head_gpt2 import RotatingHeadGPT2LMHeadModel, RotatingHeadGPT2Config
+from src.models.modeling_duo_predict_gpt2 import DuoPredictGPT2LMHeadModel, DuoPredictGPT2Config
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -401,6 +402,13 @@ def main():
         config.rotatinghead = getattr(model_args, "rotatinghead", "lr")
         config.use_cache = False
         model = load_model(training_args, RotatingHeadGPT2LMHeadModel, config)
+    elif model_args.model_type == "duo-predict-gpt2":
+        config = DuoPredictGPT2Config.from_pretrained("gpt2-medium", architectures=["DuoGPT2LMHeadModel"], n_positions=data_args.block_size, **config_kwargs)
+        config.model_type = model_args.model_type
+        DuoPredictGPT2Config.register_for_auto_class()
+        DuoPredictGPT2LMHeadModel.register_for_auto_class("AutoModel")
+        config.use_cache = False
+        model = load_model(training_args, DuoPredictGPT2LMHeadModel, config)
     else:
         raise ValueError(f"Unknown model type: {model_args.model_type}")
 
@@ -437,6 +445,8 @@ def main():
         def preprocess_logits_for_metrics(logits, labels):
             if isinstance(logits, tuple):
                 logits = logits[0]
+            if model_args.model_type == "duo-predict-gpt2":
+                logits = logits[:, ::2]
             return logits.argmax(dim=-1)
         print(training_args.local_rank, 'start load metric')
         metric = evaluate.load("accuracy")
@@ -489,6 +499,8 @@ def main():
                 else:  # Already token predictions
                     token_predictions = logits
                 
+                if model_args.model_type == "duo-predict-gpt2" and token_predictions.shape[1] >= 2*labels.shape[1]:
+                    token_predictions = token_predictions[:, ::2]
                 # Shift predictions and labels for language modeling
                 # Predictions are for the next token, so we compare preds[:, :-1] with labels[:, 1:]
                 shifted_preds = token_predictions[:, :-1]  # Remove last token prediction
@@ -556,9 +568,43 @@ def main():
 
     print(training_args.local_rank, 'Initialize our Trainer')
 
+    def mask_sequences(batch, tokenizer):
+        # Get mask token ids
+        batch["labels"] = batch["input_ids"].clone()
+        mask_token_id = tokenizer.convert_tokens_to_ids('<|MASK|>')
+        pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+        
+        # Get original shape and device
+        batch_size, seq_len = batch["input_ids"].shape
+        device = batch["input_ids"].device
+        
+        # Create new tensor with double length to accommodate mask tokens
+        new_input_ids = torch.full((batch_size, seq_len * 2), pad_token_id, dtype=batch["input_ids"].dtype, device=device)
+        
+        # Fill alternating positions with original tokens and mask tokens
+        new_input_ids[:, 1::2] = batch["input_ids"]  # Original tokens at odd indices
+        mask = new_input_ids[:, 1::2] != pad_token_id  # Find non-padding tokens
+        new_input_ids[:, ::2][mask] = mask_token_id  # Add mask tokens after non-padding tokens
+        
+        # Update attention mask if it exists
+        if "attention_mask" in batch:
+            new_attention_mask = torch.zeros((batch_size, seq_len * 2), dtype=batch["attention_mask"].dtype, device=device)
+            new_attention_mask[:, 1::2] = batch["attention_mask"]  # Copy original attention mask to odd positions
+            new_attention_mask[:, ::2] = batch["attention_mask"]  # Copy to even positions for mask tokens
+            batch["attention_mask"] = new_attention_mask[:, 1:]
+        
+        # # Save original sequence as labels (only for original token positions)
+        # labels = torch.full((batch_size, seq_len * 2), -100, dtype=batch["input_ids"].dtype, device=device)
+        # labels[:, ::2] = batch["input_ids"]  # predict original token positions
+        # labels[:, 1::2] = mask_token_id  # predict mask token positions
+        
+        batch["input_ids"] = new_input_ids[:, 1:]
+        
+        return batch
+
     def data_collator(data):
         batch = default_data_collator(data)
-        batch["labels"] = batch["input_ids"].clone()
+        batch = mask_sequences(batch, tokenizer)
         return batch
 
     class GradientNormCallback(TrainerCallback):
@@ -573,22 +619,24 @@ def main():
             if args.local_rank != 0 and args.local_rank != -1:
                 return
 
-            # Only log on logging steps (aligns with the trainer's logging frequency)
+            # # Only log on logging steps (aligns with the trainer's logging frequency)
             if state.global_step % args.logging_steps != 0:
                 return
             
             # Log gradient norms to wandb
             for name, param in model.named_parameters():
-                if param.grad is not None and ".attn" in name:
+                if param.grad is not None:
                     wandb.log({f"grad_norm/{name}": param.grad.norm().item()}, step=state.global_step)
 
     early_stopping_callback = EarlyStoppingCallback(
         early_stopping_patience=2,    # Number of evaluations with no improvement after which training will be stopped
         early_stopping_threshold=0.0  # Minimum change to qualify as an improvement
     )
-    
+    callbacks = [early_stopping_callback]
     # Initialize gradient norm callback for wandb logging
-    gradient_norm_callback = GradientNormCallback()
+    if False: ###permanently disable gradient norm logging
+        gradient_norm_callback = GradientNormCallback()
+        callbacks.append(gradient_norm_callback)
     
     trainer = Trainer(
         model=model,
@@ -598,7 +646,7 @@ def main():
         processing_class=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.do_eval else None,
-        callbacks=[early_stopping_callback, gradient_norm_callback],
+        callbacks=callbacks,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     )
 

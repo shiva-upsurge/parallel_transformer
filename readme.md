@@ -1,6 +1,6 @@
-# Parallel Transformer
+# IGNORE THE REPONSE NAME:
 
-This project implements a parallel transformer model for efficient processing.
+
 
 ## Installation
 

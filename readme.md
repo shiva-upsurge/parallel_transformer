@@ -39,6 +39,27 @@ The `create_attention_mask_matrix` function implements a specialized attention p
 - For even-indexed rows: allows attention to odd positions up to (i-2) plus current and next position
 - Enables bidirectional context flow while maintaining parallel processing
 
+Attention mask matrix pattern (1 indicates attention is allowed):
+```
+odd rows represents: self-attention
+even rows represents: custom-attention to attend current token, previous mask token and all the previous tokens
+
+Position:  1 2 3 4 5 6 7 8 
+ Row 1:    1 1 0 0 0 0 0 0   
+ Row 2:    1 1 1 0 0 0 0 0   
+ Row 3:    1 1 1 1 0 0 0 0   
+ Row 4:    1 0 1 1 1 0 0 0
+ Row 5:    1 1 1 1 1 1 0 0   
+ Row 6:    1 0 1 0 1 1 1 0   
+ Row 7:    1 1 1 1 1 1 1 1   
+ Row 8:    1 0 1 0 1 0 1 1   
+```
+
+This pattern ensures:
+- Masked tokens (even positions) can see previous context
+- Original tokens (odd positions) can attend to relevant masked tokens
+- Maintains parallel processing capability while preserving contextual information flow
+
 ### Dataset : Masking Strategy
 
 The model uses a special masking strategy implemented in `mask_sequences` function for pretraining:

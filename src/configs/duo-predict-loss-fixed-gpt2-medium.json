@@ -1,5 +1,5 @@
 {
-    "run_name": "duo-predict-gpt2-medium-wikitext",
+    "run_name": "duo-predict-loss-fixed-gpt2-medium",
     "dataset": {
         "path": "wikitext",
         "name": "wikitext-103-raw-v1",

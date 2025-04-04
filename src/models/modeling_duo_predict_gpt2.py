@@ -41,7 +41,9 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask_for
 logger = logging.get_logger(__name__)
 
 import torch
+from functools import lru_cache
 
+@lru_cache
 def create_attention_mask_matrix(tn):
     # Initialize the 10x10 matrix
     tn = tn + 1 ### add 1 for the extra token to create correct matrix, temporary fix
@@ -77,7 +79,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
     if is_causal:
         assert attn_mask is None
-        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        temp_mask = torch.ones(L, S, dtype=torch.bool, device=query.device).tril(diagonal=0)
         attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
         attn_bias.to(query.dtype)
 
@@ -129,10 +131,10 @@ def sdpa_attention_forward(
         query,
         key,
         value,
-        attn_mask=create_attention_mask_matrix(query.shape[-2]).to(query.device),
+        attn_mask=create_attention_mask_matrix(query.shape[-2]).to(query.device) if query.shape[2]>module.config.max_position_embeddings else None,
         dropout_p=dropout,
         scale=scaling,
-        is_causal=is_causal,
+        is_causal=False if query.shape[2]>module.config.max_position_embeddings else True,
     )
     attn_output = attn_output.transpose(1, 2).contiguous()
 
@@ -582,9 +584,12 @@ class DuoPredictGPT2Model(DuoPredictGPT2PretrainedModel):
             inputs_embeds = self.wte(input_ids)
         position_embeds = self.wpe(position_ids)
         ###TODO: correctly initialized
-        hidden_states = torch.empty((batch_size, input_shape[-1], self.embed_dim), device=device)
-        hidden_states[:, ::2] = inputs_embeds[:, ::2] + position_embeds.to(inputs_embeds.device)
-        hidden_states[:, 1::2] = inputs_embeds[:, 1::2] + position_embeds[:, :self.config.max_position_embeddings-1].to(inputs_embeds.device)
+        if inputs_embeds.shape[1] != position_embeds.shape[1]:
+            hidden_states = torch.empty((batch_size, input_shape[-1], self.embed_dim), device=device)
+            hidden_states[:, ::2] = inputs_embeds[:, ::2] + position_embeds.to(inputs_embeds.device)
+            hidden_states[:, 1::2] = inputs_embeds[:, 1::2] + position_embeds[:, :self.config.max_position_embeddings-1].to(inputs_embeds.device)
+        else:
+            hidden_states = inputs_embeds + position_embeds
 
         # Attention mask.
         _use_sdpa = self._attn_implementation == "sdpa" and output_attentions is False and head_mask is None
@@ -836,17 +841,21 @@ class DuoPredictGPT2LMHeadModel(DuoPredictGPT2PretrainedModel, GenerationMixin):
         lm_logits = self.lm_head(hidden_states)
 
         loss = None
+        bs, seq = lm_logits.shape[:2]
         if labels is not None:
-            # Flatten the tokens
-            total_labels = torch.full((lm_logits.shape[:2]), -100, dtype=input_ids.dtype, device=input_ids.device)
-            total_labels[:, :-1:2] = labels[:, 1: ]
-            total_labels[:, 1:-1:2] = labels[:, :-1]
+            if seq>labels.shape[1]:
+                # Flatten the tokens
+                total_labels = torch.full((bs, seq-1), -100, dtype=input_ids.dtype, device=input_ids.device)
+                total_labels[:, :-1:2] = labels[:, 1: ]
+                total_labels[:, 1::2] = labels[:, :-1]
+            else:
+                total_labels = labels[:, 1:]
             loss = self.loss_function(
-                lm_logits,
-                total_labels,
-                vocab_size=self.config.vocab_size,
-                **kwargs,
-            )
+                lm_logits[:, :-1],
+            total_labels,
+            vocab_size=self.config.vocab_size,
+            **kwargs,
+        )
 
         if not return_dict:
             output = (lm_logits,) + transformer_outputs[1:]
@@ -897,5 +906,6 @@ if __name__  == "__main__":
     model = DuoPredictGPT2LMHeadModel(cg)
     from src.utils.model_utlis import print_trainable_parameters
     print_trainable_parameters(model)
+    model.eval()
     model(torch.randint(0, 10000, (1, 100)))
     print()

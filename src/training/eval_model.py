@@ -21,6 +21,7 @@ from transformers import (
 )
 from src.data.tokenization.tokenized_hub import preprocess_and_tokenize_data
 from src.models.modeling_parallel_gpt2 import ParallelGPT2LMHeadModel, ParallelGPT2Config
+from src.models.modeling_duo_predict_gpt2 import DuoPredictGPT2LMHeadModel, DuoPredictGPT2Config
 from dotenv import load_dotenv
 load_dotenv()
 # Set up logging
@@ -49,6 +50,10 @@ class ModelArguments:
     cache_dir: Optional[str] = field(
         default=None,
         metadata={"help": "Where to store downloaded models and datasets."}
+    )
+    model_type: Optional[str] = field(
+        default="parallel-gpt2-medium",
+        metadata={"help": "The type of model to use."}
     )
 
 @dataclass
@@ -238,7 +243,7 @@ def load_and_evaluate_model(model_args, data_args, training_args):
     try:
         # Try loading from HuggingFace Hub first
         logger.info(f"Attempting to load model from HuggingFace Hub: {training_args.hub_model_id}")
-        model = ParallelGPT2LMHeadModel.from_pretrained(
+        model = DuoPredictGPT2LMHeadModel.from_pretrained(
             training_args.hub_model_id,
             trust_remote_code=True,
             use_auth_token=model_args.use_auth_token
@@ -247,7 +252,7 @@ def load_and_evaluate_model(model_args, data_args, training_args):
         logger.warning(f"Failed to load from HuggingFace Hub: {e}")
         # Fall back to local path
         logger.info(f"Attempting to load model from local path: {model_args.cache_dir}")
-        model = ParallelGPT2LMHeadModel.from_pretrained(
+        model = DuoPredictGPT2LMHeadModel.from_pretrained(
             model_args.cache_dir,
             trust_remote_code=True
         )

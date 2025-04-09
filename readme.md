@@ -1,6 +1,20 @@
-# IGNORE THE REPONSE NAME:
+# [Note] Ignore Repository Name
 
+This repository contains implementations of four novel GPT-2 variants, each introducing unique architectural modifications to enhance performance and efficiency:
 
+1. **[Drift-Diffusion GPT-2](docs/models/drift_diffusion_gpt2.md)**: Incorporates drift and diffusion mechanisms
+2. **[Parallel GPT-2](docs/models/parallel_gpt2.md)**: Implements parallel layer processing with bottleneck methods
+3. **[Duo-Predict GPT-2](docs/models/duo_predict_gpt2.md)**: Features alternating attention patterns for enhanced prediction
+4. **[Rotating Head GPT-2](docs/models/rotating_head_gpt2.md)**: Uses head-specific rotary positional embeddings
+
+## Experimental Setup
+
+All models share common [experimental settings](docs/experimental_setup.md):
+
+- Base Architecture: GPT-2 Medium
+- Dataset: WikiText-103-raw-v1 (116M tokens)
+- Training: 5 epochs on H100 GPU with BF16 precision
+- Available on HuggingFace Hub under BluebrainAI organization
 
 ## Installation
 
@@ -22,79 +36,114 @@
    pip install -r requirements.txt
    ```
 
-## Model Architecture
+## Model Architectures
 
-### Attention Mechanisms
+### 1. Drift-Diffusion GPT-2
 
-#### 1. Scaled Dot-Product Attention
+- Combines drift and diffusion mechanisms for enhanced token representation
+- Applies drift for temporal evolution and diffusion for context mixing
+- Each attention head can be configured with independent drift-diffusion parameters
 
-The model implements scaled dot-product attention mechanism (`scaled_dot_product_attention`):
+### 2. Parallel GPT-2
 
-#### 2. Custom Attention Mask Matrix
+- Splits model layers into parallel paths
+- Implements mean and concat bottleneck methods
+- Enables efficient multi-GPU distribution
+- Requires even number of layers for balanced paths
 
-The `create_attention_mask_matrix` function implements a specialized attention pattern:
+### 3. Duo-Predict GPT-2
 
-- Creates a matrix for parallel prediction
-- For odd-indexed rows: allows attention to even positions up to current position
-- For even-indexed rows: allows attention to odd positions up to (i-2) plus current and next position
-- Enables bidirectional context flow while maintaining parallel processing
+- Alternating attention patterns for odd and even positions
+- Custom attention mask matrix for enhanced prediction
+- Modified loss computation for dual predictions
+- Sequence length limited to 512 tokens
 
-Attention mask matrix pattern (1 indicates attention is allowed):
-```
-odd rows represents: self-attention
-even rows represents: custom-attention to attend current token, previous mask token and all the previous tokens
+### 4. Rotating Head GPT-2
 
-Position:  1 2 3 4 5 6 7 8 
- Row 1:    1 1 0 0 0 0 0 0   
- Row 2:    1 1 1 0 0 0 0 0   
- Row 3:    1 1 1 1 0 0 0 0   
- Row 4:    1 0 1 1 1 0 0 0
- Row 5:    1 1 1 1 1 1 0 0   
- Row 6:    1 0 1 0 1 1 1 0   
- Row 7:    1 1 1 1 1 1 1 1   
- Row 8:    1 0 1 0 1 0 1 1   
-```
+- Head-specific rotary positional embeddings
+- Two variants: Learnable Rotations (LR) and Geometric Progression (GP)
+- Optional layer normalization for stability
+- Efficient implementation with cached patterns
 
-This pattern ensures:
-- Masked tokens (even positions) can see previous context
-- Original tokens (odd positions) can attend to relevant masked tokens
-- Maintains parallel processing capability while preserving contextual information flow
+## Pre-trained Models
 
-### Dataset : Masking Strategy
+All models are available on HuggingFace Hub under the BluebrainAI organization:
 
-The model uses a special masking strategy implemented in `mask_sequences` function for pretraining:
+1. Drift-Diffusion Variants:
 
-- Takes input sequences and doubles their length to accommodate mask tokens
-- Places original tokens at odd indices and mask tokens at even indices
-- Only adds mask tokens before non-padding tokens
-- Handles attention masks appropriately to maintain model's attention mechanism
-- Uses special `<|MASK|>` token for masking
+   - `BluebrainAI/dd-gpt2-medium-wikitext`
+2. Parallel Variants:
 
-This masking approach enables the model to learn bidirectional context by predicting masked tokens during pretraining.
+   - `BluebrainAI/parallel-gpt2-medium-wikitext`
+   - `BluebrainAI/parallel-mean-bottleneck-gpt2-medium-wikitext`
+3. Duo-Predict Variants:
 
+   - `BluebrainAI/duo-predict-gpt2-medium-wikitext`
+   - `BluebrainAI/duo-predict-loss-fixed-gpt2-medium-wikitext`
+4. Rotating Head Variants:
 
-note: `config.max_position_embeddings` is without interleaved mask token
+   - `BluebrainAI/rotating-head-lr-gpt2-medium-wikitext`
+   - `BluebrainAI/rotating-head-gp-gpt2-medium-wikitext`
+   - `BluebrainAI/rotating-head-lr-norm-gpt2-medium-wikitext`
+   - `BluebrainAI/rotating-head-gp-norm-gpt2-medium-wikitext`
 
 ## Usage
 
-### Running Pre-trained Model
+### Installation
 
-To run the pre-trained model using a configuration file:
+1. Clone the repository:
 
-```bash
-python pretrained.py --config src/configs/duo-predict-loss-fixed-gpt2-medium.json
-```
+   ```bash
+   git clone <repository-url>
+   cd parallel_transformer
+   ```
+2. Create a virtual environment:
 
-The config file should contain the necessary parameters for model initialization and training.
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+3. Install dependencies:
 
-### Evaluating the Model
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-To evaluate the model's performance:
+### Training
 
-```bash
-python eval_model.py --config src/configs/duo-predict-loss-fixed-gpt2-medium.json
-```
+1. Choose a configuration file from `src/configs/`
+2. Run training:
+   ```bash
+   python train.py --config src/configs/MODEL_CONFIG.json
+   ```
 
-```yaml
+### Evaluation
 
+1. For perplexity and accuracy metrics:
+
+   ```bash
+   python eval_model.py --config src/configs/MODEL_CONFIG.json
+   ```
+
+## Documentation
+
+- [Experimental Setup](docs/experimental_setup.md)
+- Model Documentation:
+  - [Drift-Diffusion GPT-2](docs/models/drift_diffusion_gpt2.md)
+  - [Parallel GPT-2](docs/models/parallel_gpt2.md)
+  - [Duo-Predict GPT-2](docs/models/duo_predict_gpt2.md)
+  - [Rotating Head GPT-2](docs/models/rotating_head_gpt2.md)
+
+## Citation
+
+If you use this code in your research, please cite our work:
+
+```bibtex
+@misc{parallel_transformer,
+  author = {BluebrainAI},
+  title = {Parallel Transformer Models},
+  year = {2025},
+  publisher = {GitHub},
+  url = {https://github.com/BluebrainAI/parallel_transformer}
+}
 ```
